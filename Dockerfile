@@ -13,7 +13,7 @@ EXPOSE 20023 20024 20025 20026 20123 20124 20125 20126
 
 RUN mkdir -p /cgate/tag /cgate/config /cgate/logs
 
-COPY "C-Gate Downloads/cgate-3.7.0_2285/cgate/" /cgate/
+COPY ["C-Gate Downloads/cgate-3.7.0_2285/cgate/", "/cgate/"]
 
 # Default config and tag files are copied in but expected to be
 # overridden by bind mounts at runtime
