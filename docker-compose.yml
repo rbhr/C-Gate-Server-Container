@@ -1,0 +1,32 @@
+services:
+  cgate:
+    build: .
+    image: cgate-server:latest
+    container_name: cgate-server
+    restart: unless-stopped
+    ports:
+      # Command Interface
+      - "20023:20023"
+      # Event Interface
+      - "20024:20024"
+      # Status Change Port
+      - "20025:20025"
+      # Config Change Port
+      - "20026:20026"
+      # SSL Command Interface
+      - "20123:20123"
+      # SSL Event Interface
+      - "20124:20124"
+      # SSL Status Change Port
+      - "20125:20125"
+      # SSL Config Change Port
+      - "20126:20126"
+    volumes:
+      - ./config:/cgate/config
+      - ./tag:/cgate/tag
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+        tag: "cgate-server"
