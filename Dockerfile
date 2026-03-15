@@ -30,3 +30,6 @@ ENTRYPOINT ["java", \
     "-Xms64M", \
     "-Xmx256M", \
     "-jar", "cgate.jar"]
+
+# Default C-Gate address and project
+CMD ["-connect", "localhost", "-project", "HOME"]
