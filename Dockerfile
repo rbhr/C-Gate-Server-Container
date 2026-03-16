@@ -1,5 +1,5 @@
 ## Stage 1: Build the C-Gate web console bridge
-FROM golang:1.22-alpine AS web-build
+FROM golang:1.25-alpine AS web-build
 WORKDIR /build
 COPY web/main.go web/console.html ./
 RUN go mod init cgate-web && \
