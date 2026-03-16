@@ -43,5 +43,5 @@ WORKDIR /cgate
 # Launch via entrypoint wrapper (starts web bridge, then execs C-Gate)
 ENTRYPOINT ["sh", "/cgate/entrypoint.sh"]
 
-# Default C-Gate address and project
-CMD ["-connect", "localhost", "-project", "HOME"]
+# Run in server mode (ignores shutdown attempts, keeps container alive)
+CMD ["-s"]
