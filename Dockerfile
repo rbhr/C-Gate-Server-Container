@@ -41,7 +41,7 @@ RUN chmod +x /cgate/entrypoint.sh
 WORKDIR /cgate
 
 # Launch via entrypoint wrapper (starts web bridge, then execs C-Gate)
-ENTRYPOINT ["/cgate/entrypoint.sh"]
+ENTRYPOINT ["sh", "/cgate/entrypoint.sh"]
 
 # Default C-Gate address and project
 CMD ["-connect", "localhost", "-project", "HOME"]
