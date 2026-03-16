@@ -36,6 +36,7 @@ COPY --from=web-build /build/cgate-web /cgate/cgate-web
 
 # Copy entrypoint wrapper
 COPY entrypoint.sh /cgate/entrypoint.sh
+RUN chmod +x /cgate/entrypoint.sh
 
 WORKDIR /cgate
 
