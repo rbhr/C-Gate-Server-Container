@@ -21,6 +21,8 @@ services:
       - "20125:20125"
       # SSL Config Change Port
       - "20126:20126"
+      # Web Console / HTTP Commander
+      - "8980:8980"
     volumes:
       - ./config:/cgate/config
       - ./tag:/cgate/tag
