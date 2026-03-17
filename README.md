@@ -1,5 +1,7 @@
 # C-Gate Server Container
 
+> **v1.0.0**
+
 Containerised [SpaceLogic C-Gate Server](https://www.se.com/au/en/product-range/63702-spacelogic-c-gate/) (v3.7.0 build 2285) with a built-in web console for testing and debugging C-Bus networks.
 
 ## Quick Start
@@ -72,12 +74,16 @@ curl "http://localhost:8980/cgate?cmd=GET%20//HOME/254/56/*%20level"
 
 ### Project Files
 
-Project tag databases are stored in the `tag/` directory and bind-mounted into the container. The default project `HOME` is included — add your own `.db` files here.
+Project tag databases are stored in the `tag/` directory and bind-mounted into the container. The default project `HOME` is included.
+
+> **Important:** Each C-Gate project must reside in a subfolder of `tag/` whose name matches the project name. For example, the `HOME` project database must be at `tag/HOME/HOME.db`.
 
 ```
 tag/
-├── HOME.db
-└── EXAMPLE.db
+├── HOME/
+│   └── HOME.db
+└── EXAMPLE/
+    └── EXAMPLE.db
 ```
 
 ### Access Control
@@ -145,8 +151,19 @@ docker pull ghcr.io/<owner>/c-gate-server-container:latest
 
 ## Logging
 
-Container logs are managed by Docker's JSON file driver with rotation (10 MB max, 5 files). View logs with:
+C-Gate uses a custom [Logback](https://logback.qos.ch/) configuration (`config/logback.xml`) that provides dual-output logging:
+
+- **Console (stdout)** — C-Gate logs are written directly to stdout via Logback's `ConsoleAppender`, making them available natively through `docker compose logs` and container management tools like Portainer. No log-tailing workarounds are needed.
+- **Rolling file** — Logs are also written to `logs/event.txt` inside the container (mounted at `./C-Gate-Native-Logs` on the host), with daily rotation and a 500 KB size trigger. Up to 10 days of history are retained.
+
+Both appenders run at `DEBUG` level by default. Edit `config/logback.xml` to adjust levels or patterns.
+
+Docker's JSON file log driver adds a second layer of rotation for the stdout stream (10 MB max, 5 rotated files), so container logs stay bounded even if Logback output is verbose.
 
 ```bash
+# Follow live container logs
 docker compose logs -f cgate
+
+# Native C-Gate log files on the host
+ls ./C-Gate-Native-Logs/
 ```
