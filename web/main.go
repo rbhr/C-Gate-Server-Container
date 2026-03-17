@@ -19,11 +19,18 @@ import (
 var consoleHTML embed.FS
 
 const (
-	cgateHost       = "localhost"
+	cgateHost        = "localhost"
 	cgateCommandPort = "20023"
 	cgateEventPort   = "20024"
 	cgateStatusPort  = "20025"
 	listenAddr       = ":8980"
+
+	// TCP keepalive interval for long-lived connections
+	keepAliveInterval = 30 * time.Second
+
+	// Read deadline for stream connections — if nothing arrives within
+	// this window we assume the connection is dead and reconnect.
+	streamReadDeadline = 5 * time.Minute
 )
 
 // wsHub manages WebSocket clients
@@ -44,8 +51,12 @@ func (h *wsHub) add(ws *websocket.Conn) {
 
 func (h *wsHub) remove(ws *websocket.Conn) {
 	h.mu.Lock()
+	_, ok := h.clients[ws]
 	delete(h.clients, ws)
 	h.mu.Unlock()
+	if ok {
+		ws.Close()
+	}
 }
 
 func (h *wsHub) broadcast(msg map[string]string) {
@@ -61,12 +72,17 @@ func (h *wsHub) broadcast(msg map[string]string) {
 
 var hub = newHub()
 
-// connectTCP dials a C-Gate port with retries
-func connectTCP(port string) net.Conn {
+// dialTCP connects to a C-Gate port with retries and enables TCP keepalive
+func dialTCP(port string) net.Conn {
 	addr := net.JoinHostPort(cgateHost, port)
 	for {
 		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 		if err == nil {
+			// Enable TCP keepalive so the OS detects dead connections
+			if tc, ok := conn.(*net.TCPConn); ok {
+				tc.SetKeepAlive(true)
+				tc.SetKeepAlivePeriod(keepAliveInterval)
+			}
 			log.Printf("Connected to C-Gate %s", addr)
 			return conn
 		}
@@ -75,81 +91,110 @@ func connectTCP(port string) net.Conn {
 	}
 }
 
-// streamPort reads lines from a C-Gate port and broadcasts them
+// streamPort reads lines from a C-Gate port and broadcasts them.
+// Reconnects automatically on any error or timeout.
 func streamPort(port, streamName string) {
 	for {
-		conn := connectTCP(port)
+		conn := dialTCP(port)
 		scanner := bufio.NewScanner(conn)
-		for scanner.Scan() {
-			line := scanner.Text()
-			hub.broadcast(map[string]string{
-				"stream": streamName,
-				"data":   line,
-				"time":   time.Now().Format("15:04:05"),
-			})
+		alive := true
+		for alive {
+			// Set a read deadline so we detect dead connections even when
+			// C-Gate is quiet (no events/status changes for a while).
+			conn.SetReadDeadline(time.Now().Add(streamReadDeadline))
+			if scanner.Scan() {
+				line := scanner.Text()
+				hub.broadcast(map[string]string{
+					"stream": streamName,
+					"data":   line,
+					"time":   time.Now().Format("15:04:05"),
+				})
+			} else {
+				alive = false
+			}
 		}
-		log.Printf("Disconnected from %s stream, reconnecting...", streamName)
+		if err := scanner.Err(); err != nil {
+			log.Printf("Stream %s error: %v — reconnecting", streamName, err)
+		} else {
+			log.Printf("Stream %s disconnected (EOF) — reconnecting", streamName)
+		}
 		conn.Close()
 		time.Sleep(2 * time.Second)
 	}
 }
 
-// commandMu serialises command/response pairs on the control socket
-var (
-	commandConn net.Conn
-	commandMu   sync.Mutex
-)
-
-func initCommandConn() {
-	commandConn = connectTCP(cgateCommandPort)
-	// Drain the connect banner
-	commandConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	buf := make([]byte, 4096)
-	commandConn.Read(buf)
-	commandConn.SetReadDeadline(time.Time{})
+// commandSession holds the persistent command connection and its reader
+type commandSession struct {
+	mu     sync.Mutex
+	conn   net.Conn
+	reader *bufio.Reader
 }
 
-func sendCommand(cmd string) ([]string, error) {
-	commandMu.Lock()
-	defer commandMu.Unlock()
+var cmdSession = &commandSession{}
 
-	if commandConn == nil {
-		initCommandConn()
+func (s *commandSession) connect() {
+	s.conn = dialTCP(cgateCommandPort)
+	s.reader = bufio.NewReader(s.conn)
+	// Drain the connect banner
+	s.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		line, err := s.reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+		_ = line
+	}
+	s.conn.SetReadDeadline(time.Time{})
+}
+
+func (s *commandSession) reconnect() {
+	if s.conn != nil {
+		s.conn.Close()
+	}
+	s.connect()
+}
+
+func (s *commandSession) send(cmd string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.conn == nil {
+		s.connect()
 	}
 
-	_, err := fmt.Fprintf(commandConn, "%s\r\n", cmd)
+	_, err := fmt.Fprintf(s.conn, "%s\r\n", cmd)
 	if err != nil {
-		// Reconnect and retry once
-		commandConn.Close()
-		initCommandConn()
-		_, err = fmt.Fprintf(commandConn, "%s\r\n", cmd)
+		log.Printf("Command write failed: %v — reconnecting", err)
+		s.reconnect()
+		_, err = fmt.Fprintf(s.conn, "%s\r\n", cmd)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	// Read response lines (C-Gate sends a response code like "200 ..." or "300-..." for multi-line)
+	// Read response lines
 	var lines []string
-	reader := bufio.NewReader(commandConn)
 	for {
-		commandConn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		line, err := reader.ReadString('\n')
+		s.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		line, err := s.reader.ReadString('\n')
 		if err != nil {
-			break
+			if len(lines) > 0 {
+				break // got at least some response
+			}
+			// Connection probably dead — reconnect for next call
+			log.Printf("Command read failed: %v — will reconnect on next call", err)
+			s.reconnect()
+			return nil, err
 		}
 		line = strings.TrimRight(line, "\r\n")
 		lines = append(lines, line)
 
 		// Single-line response or last line of multi-line (no dash after code)
-		if len(line) >= 3 {
-			code := line[:3]
-			if len(line) == 3 || (len(line) > 3 && line[3] != '-') {
-				_ = code
-				break
-			}
+		if len(line) >= 3 && (len(line) == 3 || line[3] != '-') {
+			break
 		}
 	}
-	commandConn.SetReadDeadline(time.Time{})
+	s.conn.SetReadDeadline(time.Time{})
 	return lines, nil
 }
 
@@ -160,7 +205,7 @@ func handleCGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lines, err := sendCommand(cmd)
+	lines, err := cmdSession.send(cmd)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadGateway)
 		return
@@ -200,6 +245,11 @@ func handleWS(ws *websocket.Conn) {
 	}
 }
 
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"ok"}`))
+}
+
 func main() {
 	log.Printf("C-Gate Web Console starting on %s", listenAddr)
 
@@ -209,9 +259,9 @@ func main() {
 
 	// Initialize command connection
 	go func() {
-		commandMu.Lock()
-		initCommandConn()
-		commandMu.Unlock()
+		cmdSession.mu.Lock()
+		cmdSession.connect()
+		cmdSession.mu.Unlock()
 	}()
 
 	// Routes
@@ -221,6 +271,7 @@ func main() {
 		w.Write(data)
 	})
 	http.HandleFunc("/cgate", handleCGate)
+	http.HandleFunc("/health", handleHealth)
 	http.Handle("/ws", websocket.Handler(handleWS))
 
 	log.Fatal(http.ListenAndServe(listenAddr, nil))
