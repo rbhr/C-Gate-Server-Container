@@ -9,6 +9,16 @@
   done
 ) &
 
+# Tail C-Gate log files into container stdout so they appear in
+# docker logs / Portainer. Waits for files to appear, then follows.
+(
+  # Wait for C-Gate to create its log files
+  while [ ! -d /cgate/logs ] || [ -z "$(ls /cgate/logs/*.txt 2>/dev/null)" ]; do
+    sleep 2
+  done
+  tail -n 0 -F /cgate/logs/*.txt
+) &
+
 # Launch C-Gate as PID 1 (exec replaces shell for proper signal handling)
 exec java \
     -Djava.library.path=. \

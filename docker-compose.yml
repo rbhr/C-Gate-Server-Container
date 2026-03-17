@@ -26,6 +26,7 @@ services:
     volumes:
       - ./config:/cgate/config
       - ./tag:/cgate/tag
+      - ./C-Gate-Native-Logs:/cgate/logs
     logging:
       driver: json-file
       options:
