@@ -31,6 +31,10 @@ const (
 	// Read deadline for stream connections — if nothing arrives within
 	// this window we assume the connection is dead and reconnect.
 	streamReadDeadline = 5 * time.Minute
+
+	// How often to send a heartbeat on the command connection to keep
+	// it alive through NAT/firewalls and detect silent drops.
+	commandHeartbeat = 2 * time.Minute
 )
 
 // wsHub manages WebSocket clients
@@ -133,6 +137,7 @@ type commandSession struct {
 var cmdSession = &commandSession{}
 
 func (s *commandSession) connect() {
+	log.Printf("Command session: connecting to C-Gate command port %s", cgateCommandPort)
 	s.conn = dialTCP(cgateCommandPort)
 	s.reader = bufio.NewReader(s.conn)
 	// Drain the connect banner
@@ -145,13 +150,29 @@ func (s *commandSession) connect() {
 		_ = line
 	}
 	s.conn.SetReadDeadline(time.Time{})
+	log.Printf("Command session: ready")
 }
 
 func (s *commandSession) reconnect() {
+	log.Printf("Command session: reconnecting")
 	if s.conn != nil {
 		s.conn.Close()
 	}
 	s.connect()
+}
+
+// heartbeat periodically sends a noop command to keep the command
+// connection alive and detect silent drops before a real command fails.
+func (s *commandSession) heartbeat() {
+	for {
+		time.Sleep(commandHeartbeat)
+		_, err := s.send("noop")
+		if err != nil {
+			log.Printf("Command session: heartbeat failed: %v", err)
+		} else {
+			log.Printf("Command session: heartbeat ok")
+		}
+	}
 }
 
 func (s *commandSession) send(cmd string) ([]string, error) {
@@ -162,12 +183,15 @@ func (s *commandSession) send(cmd string) ([]string, error) {
 		s.connect()
 	}
 
+	log.Printf("Command session: sending %q", cmd)
+
 	_, err := fmt.Fprintf(s.conn, "%s\r\n", cmd)
 	if err != nil {
-		log.Printf("Command write failed: %v — reconnecting", err)
+		log.Printf("Command session: write failed: %v — reconnecting", err)
 		s.reconnect()
 		_, err = fmt.Fprintf(s.conn, "%s\r\n", cmd)
 		if err != nil {
+			log.Printf("Command session: write failed after reconnect: %v", err)
 			return nil, err
 		}
 	}
@@ -181,8 +205,7 @@ func (s *commandSession) send(cmd string) ([]string, error) {
 			if len(lines) > 0 {
 				break // got at least some response
 			}
-			// Connection probably dead — reconnect for next call
-			log.Printf("Command read failed: %v — will reconnect on next call", err)
+			log.Printf("Command session: read failed: %v — reconnecting", err)
 			s.reconnect()
 			return nil, err
 		}
@@ -195,6 +218,7 @@ func (s *commandSession) send(cmd string) ([]string, error) {
 		}
 	}
 	s.conn.SetReadDeadline(time.Time{})
+	log.Printf("Command session: response %v", lines)
 	return lines, nil
 }
 
@@ -257,11 +281,12 @@ func main() {
 	go streamPort(cgateEventPort, "event")
 	go streamPort(cgateStatusPort, "status")
 
-	// Initialize command connection
+	// Initialize command connection and start heartbeat
 	go func() {
 		cmdSession.mu.Lock()
 		cmdSession.connect()
 		cmdSession.mu.Unlock()
+		go cmdSession.heartbeat()
 	}()
 
 	// Routes
