@@ -134,7 +134,7 @@ curl "http://localhost:8980/cgate?cmd=version"
 
 - Semantic versioning (major.minor.patch) tracked in `VERSION` file and README header.
 - Git tags: `v1.0.0`, etc.
-- Docker image tags via GitHub Actions: `latest` (main branch), `sha-<commit>`, `pr-<number>`.
+- Docker image tags via GitHub Actions: `latest` and `cgate-<version>` (main branch), `sha-<commit>`, `pr-<number>`.
 
 ## Common Tasks
 
