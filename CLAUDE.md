@@ -59,8 +59,10 @@ Resolution is lenient by design — the goal is "unzip a new distribution into
 1. Exact directory name — `cgate-3.7.1_2300` or `3.7.1_2300`.
 2. Otherwise an unambiguous prefix — `3.7.1` matches `cgate-3.7.1_2300`.
    Multiple matches are an error listing them, not a silent pick.
-3. Inside the match, `cgate.jar` is located at either `<dir>/cgate/cgate.jar`
-   (how the vendor zip extracts) or `<dir>/cgate.jar` (flattened).
+3. Inside the match, the tree root is found by locating `cgate.jar` rather than
+   assuming a folder name — either `<dir>/cgate.jar` (3.8.0_2348 ships this way)
+   or `<dir>/<anything>/cgate.jar` (3.7.0_2285 nests it under `cgate/`). Two
+   sub-folders each holding a `cgate.jar` is an error, not a guess.
 
 Missing version, ambiguous prefix, and no-`cgate.jar` each fail the build with a
 message naming what was found. The resolved path and `BuildInfo.txt` version and
