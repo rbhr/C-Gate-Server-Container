@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-Containerised Schneider Electric SpaceLogic C-Gate Server with a Go-based web console bridge. The bundled C-Gate build is selected by the `CGATE_VERSION` build arg (default `3.7.0_2285`) — see **C-Gate Version Selection** below. The container packages a proprietary Java application (C-Gate) alongside a custom Go HTTP/WebSocket proxy for browser-based debugging of C-Bus home automation networks.
+Containerised Schneider Electric SpaceLogic C-Gate Server with a Go-based web console bridge. The bundled C-Gate build is selected by the `CGATE_VERSION` build arg (default `3.8.0_2348`) — see **C-Gate Version Selection** below. The container packages a proprietary Java application (C-Gate) alongside a custom Go HTTP/WebSocket proxy for browser-based debugging of C-Bus home automation networks.
 
-**Current version:** v1.0.1 (see `VERSION` file)
+**Current version:** v1.1.0 (see `VERSION` file)
 
 ## Architecture
 
@@ -51,7 +51,7 @@ Docker Container
 ## C-Gate Version Selection
 
 The C-Gate distribution is chosen at image build time via the `CGATE_VERSION`
-build arg (default `3.7.0_2285`), resolved against directories in `C-Gate Downloads/`.
+build arg (default `3.8.0_2348`), resolved against directories in `C-Gate Downloads/`.
 
 Resolution is lenient by design — the goal is "unzip a new distribution into
 `C-Gate Downloads/`, build with its version, change nothing else":
@@ -59,8 +59,10 @@ Resolution is lenient by design — the goal is "unzip a new distribution into
 1. Exact directory name — `cgate-3.7.1_2300` or `3.7.1_2300`.
 2. Otherwise an unambiguous prefix — `3.7.1` matches `cgate-3.7.1_2300`.
    Multiple matches are an error listing them, not a silent pick.
-3. Inside the match, `cgate.jar` is located at either `<dir>/cgate/cgate.jar`
-   (how the vendor zip extracts) or `<dir>/cgate.jar` (flattened).
+3. Inside the match, the tree root is found by locating `cgate.jar` rather than
+   assuming a folder name — either `<dir>/cgate.jar` (3.8.0_2348 ships this way)
+   or `<dir>/<anything>/cgate.jar` (3.7.0_2285 nests it under `cgate/`). Two
+   sub-folders each holding a `cgate.jar` is an error, not a guess.
 
 Missing version, ambiguous prefix, and no-`cgate.jar` each fail the build with a
 message naming what was found. The resolved path and `BuildInfo.txt` version and

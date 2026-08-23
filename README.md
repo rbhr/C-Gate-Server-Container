@@ -1,6 +1,6 @@
 # C-Gate Server Container
 
-> **v1.0.1**
+> **v1.1.0**
 
 Containerised [SpaceLogic C-Gate Server](https://www.se.com/au/en/product-range/63702-spacelogic-c-gate/) with a built-in web console for testing and debugging C-Bus networks. The bundled C-Gate build is selectable at image build time — see [C-Gate Version](#c-gate-version).
 
@@ -89,7 +89,7 @@ tag/
 ### C-Gate Version
 
 The C-Gate distribution bundled into the image is selected by the `CGATE_VERSION`
-build argument, which defaults to `3.7.0_2285`.
+build argument, which defaults to `3.8.0_2348`.
 
 To build a different version, unzip the Schneider distribution into
 `C-Gate Downloads/` and build with its version — no `Dockerfile` edit needed:
@@ -102,21 +102,27 @@ CGATE_VERSION=3.7.1 docker compose build
 docker build --build-arg CGATE_VERSION=3.7.1 -t cgate-server .
 ```
 
-Matching is deliberately lenient, so the vendor zip can be dropped in as-is:
+Matching is deliberately lenient, so the vendor zip can be dropped in as-is.
+Schneider has changed the packaging between releases, so the layout inside a
+version folder is discovered rather than assumed:
 
 ```
 C-Gate Downloads/
 ├── cgate-3.7.0_2285/
-│   └── cgate/          ← how the vendor zip extracts
-├── cgate-3.7.1_2300/
-│   └── cgate/
-└── 3.7.2/              ← or flattened, if you prefer
-    └── cgate.jar
+│   └── cgate/          ← 3.7.0 nests the tree under cgate/
+│       └── cgate.jar
+├── cgate-3.8.0_2348/
+│   └── cgate.jar       ← 3.8.0 ships it flattened
+└── cgate-3.9.0_2400/
+    └── CGate/          ← any other folder name also works
+        └── cgate.jar
 ```
 
-`CGATE_VERSION` accepts the exact directory name (`cgate-3.7.1_2300` or
-`3.7.1_2300`) or an unambiguous prefix (`3.7.1`), and locates `cgate.jar` whether
-it sits under a nested `cgate/` folder or directly in the version folder.
+`CGATE_VERSION` accepts the exact directory name (`cgate-3.8.0_2348` or
+`3.8.0_2348`) or an unambiguous prefix (`3.8.0`). Within the matched directory
+the tree root is whichever location holds `cgate.jar` — the folder itself, or a
+single sub-folder of any name. Two sub-folders each holding a `cgate.jar` is an
+error rather than a guess.
 
 The build fails with an actionable message if the version is missing, matches
 more than one directory, or contains no `cgate.jar`:

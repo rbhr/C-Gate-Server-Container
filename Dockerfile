@@ -3,7 +3,7 @@
 ## Selects which tree under "C-Gate Downloads/cgate-<version>/cgate/" is
 ## installed. Declared before the first FROM so it is global; each stage that
 ## uses it re-declares ARG CGATE_VERSION to pull it into scope.
-ARG CGATE_VERSION=3.7.0_2285
+ARG CGATE_VERSION=3.8.0_2348
 
 ## Stage 1: Build the C-Gate web console bridge
 FROM golang:1.25-alpine AS web-build
@@ -25,9 +25,10 @@ RUN go mod init cgate-web && \
 ## dropped into "C-Gate Downloads/" and built with no other changes. It accepts:
 ##   - the exact directory name       cgate-3.7.1_2300  /  3.7.1_2300
 ##   - an unambiguous prefix          3.7.1  ->  cgate-3.7.1_2300
-## and either layout inside that directory:
-##   - <dir>/cgate/cgate.jar          (how the vendor zip extracts)
-##   - <dir>/cgate.jar                (contents moved up a level)
+## Inside that directory the tree root is found by locating cgate.jar rather
+## than assuming a folder name, since the vendor ships more than one shape:
+##   - <dir>/cgate.jar                (3.8.0_2348 ships flattened)
+##   - <dir>/<anything>/cgate.jar     (3.7.0_2285 nests it under cgate/)
 FROM eclipse-temurin:11-jre AS cgate-dist
 ARG CGATE_VERSION
 COPY ["C-Gate Downloads/", "/downloads/"]
@@ -64,14 +65,30 @@ RUN set -eu; \
         exit 1; \
     fi; \
     dir="$1"; \
-    if [ -f "$dir/cgate/cgate.jar" ]; then src="$dir/cgate"; \
-    elif [ -f "$dir/cgate.jar" ]; then src="$dir"; \
+    set --; \
+    if [ -f "$dir/cgate.jar" ]; then \
+        set -- "$dir"; \
     else \
-        echo "ERROR: no cgate.jar found under '${dir##*/}'" >&2; \
-        echo "Expected '${dir##*/}/cgate/cgate.jar' (vendor zip layout)" >&2; \
-        echo "      or '${dir##*/}/cgate.jar'." >&2; \
+        for sub in "$dir"/*/; do \
+            [ -d "$sub" ] || continue; \
+            [ -f "${sub}cgate.jar" ] || continue; \
+            set -- "$@" "${sub%/}"; \
+        done; \
+    fi; \
+    if [ "$#" -eq 0 ]; then \
+        echo "ERROR: no cgate.jar found in '${dir##*/}'" >&2; \
+        echo "Looked for '${dir##*/}/cgate.jar' and one level below it." >&2; \
+        echo "Contains:" >&2; \
+        ls -1 "$dir" 2>/dev/null | sed 's/^/  /' >&2; \
         exit 1; \
     fi; \
+    if [ "$#" -gt 1 ]; then \
+        echo "ERROR: '${dir##*/}' holds more than one cgate.jar:" >&2; \
+        for c in "$@"; do echo "  ${c##*/}/cgate.jar" >&2; done; \
+        echo "Point CGATE_VERSION at a directory holding a single distribution." >&2; \
+        exit 1; \
+    fi; \
+    src="$1"; \
     echo "Using C-Gate distribution: ${src#/downloads/}"; \
     if [ -f "$src/BuildInfo.txt" ]; then \
         sed -n 's/^\(Version\|Build\):[[:space:]]*/  &/p' "$src/BuildInfo.txt"; \

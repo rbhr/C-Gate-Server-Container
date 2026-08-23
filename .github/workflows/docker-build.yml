@@ -12,7 +12,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
   # C-Gate distribution bundled into the published image. Must match a
   # directory named "C-Gate Downloads/cgate-<version>/".
-  CGATE_VERSION: 3.7.0_2285
+  CGATE_VERSION: 3.8.0_2348
 
 jobs:
   build:
