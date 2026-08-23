@@ -1,6 +1,12 @@
 services:
   cgate:
-    build: .
+    build:
+      context: .
+      args:
+        # C-Gate distribution bundled into the image. Must match a
+        # directory named "C-Gate Downloads/cgate-<version>/".
+        # Override via a CGATE_VERSION env var or a .env file.
+        CGATE_VERSION: ${CGATE_VERSION:-3.7.0_2285}
     image: cgate-server:latest
     container_name: cgate-server
     restart: unless-stopped

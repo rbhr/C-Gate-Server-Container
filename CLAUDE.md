@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-Containerised Schneider Electric SpaceLogic C-Gate Server (v3.7.0, build 2285) with a Go-based web console bridge. The container packages a proprietary Java application (C-Gate) alongside a custom Go HTTP/WebSocket proxy for browser-based debugging of C-Bus home automation networks.
+Containerised Schneider Electric SpaceLogic C-Gate Server with a Go-based web console bridge. The bundled C-Gate build is selected by the `CGATE_VERSION` build arg (default `3.7.0_2285`) — see **C-Gate Version Selection** below. The container packages a proprietary Java application (C-Gate) alongside a custom Go HTTP/WebSocket proxy for browser-based debugging of C-Bus home automation networks.
 
-**Current version:** v1.0.0 (see `VERSION` file)
+**Current version:** v1.0.1 (see `VERSION` file)
 
 ## Architecture
 
@@ -25,6 +25,7 @@ Docker Container
 - `entrypoint.sh` starts the Go bridge in a restart loop, then `exec`s the Java process as PID 1.
 - Logback config (`config/logback.xml`) is injected via `-Dlogback.configurationFile` JVM flag.
 - The Go binary is built in a multi-stage Docker build (`golang:1.25-alpine` → `eclipse-temurin:11-jre`).
+- A `cgate-dist` build stage resolves `CGATE_VERSION` to a distribution tree and stages it at `/dist`, so the runtime stage can `COPY --from` a fixed path.
 
 ## Key Files
 
@@ -41,7 +42,33 @@ Docker Container
 | `tag/` | Project databases — each project in a subfolder matching its name |
 | `VERSION` | Project version (semver) |
 | `.github/workflows/docker-build.yml` | CI: multi-arch build (amd64/arm64) → ghcr.io |
-| `C-Gate Downloads/` | Upstream C-Gate distribution (v3.7.0 build 2285) |
+| `C-Gate Downloads/` | Upstream C-Gate distributions, one `cgate-<version>/` dir each |
+
+## C-Gate Version Selection
+
+The C-Gate distribution is chosen at image build time via the `CGATE_VERSION`
+build arg (default `3.7.0_2285`), which names a directory under `C-Gate Downloads/`:
+
+```
+C-Gate Downloads/cgate-<version>/cgate/   →   /cgate in the image
+```
+
+Wiring:
+- `Dockerfile` — global `ARG CGATE_VERSION`; the `cgate-dist` stage validates it
+  and stages the tree at `/dist`; the runtime stage does `COPY --from=cgate-dist`
+  and records the value as the `cgate.version` image label.
+- `docker-compose.yml` — passes it through `build.args`, overridable with a
+  `CGATE_VERSION` env var or `.env` file.
+- `.github/workflows/docker-build.yml` — sets it as a workflow-level env var,
+  passes it as a build arg, and publishes a matching `cgate-<version>` image tag.
+
+The version is deliberately **not** repeated in prose — the build arg default in
+`Dockerfile` is the source of truth. An unknown version fails the build with an
+error listing the versions present.
+
+The staging stage exists because the source path contains a space, which rules
+out the shell form of `COPY` that expands build args; resolving the version in a
+`RUN` keeps `CGATE_VERSION` out of any `COPY` path.
 
 ## Tag Directory Convention
 
@@ -98,3 +125,4 @@ curl "http://localhost:8980/cgate?cmd=version"
 - **Modify web console UI**: Edit `web/console.html` (embedded via `//go:embed`). Rebuild image.
 - **Update access control**: Edit `config/access.txt`. Restart container.
 - **Override startup flags**: `docker compose run --rm cgate -connect <ip> -project <name>`
+- **Change C-Gate version**: Add `C-Gate Downloads/cgate-<version>/cgate/`, then build with `CGATE_VERSION=<version> docker compose build`.

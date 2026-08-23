@@ -1,8 +1,8 @@
 # C-Gate Server Container
 
-> **v1.0.0**
+> **v1.0.1**
 
-Containerised [SpaceLogic C-Gate Server](https://www.se.com/au/en/product-range/63702-spacelogic-c-gate/) (v3.7.0 build 2285) with a built-in web console for testing and debugging C-Bus networks.
+Containerised [SpaceLogic C-Gate Server](https://www.se.com/au/en/product-range/63702-spacelogic-c-gate/) with a built-in web console for testing and debugging C-Bus networks. The bundled C-Gate build is selectable at image build time — see [C-Gate Version](#c-gate-version).
 
 ## Quick Start
 
@@ -84,6 +84,39 @@ tag/
 │   └── HOME.db
 └── EXAMPLE/
     └── EXAMPLE.db
+```
+
+### C-Gate Version
+
+The C-Gate distribution bundled into the image is selected by the `CGATE_VERSION`
+build argument, which defaults to `3.7.0_2285`. Its value names a directory under
+`C-Gate Downloads/`:
+
+```
+C-Gate Downloads/
+└── cgate-3.7.0_2285/
+    └── cgate/          ← contents copied to /cgate in the image
+```
+
+To build against a different distribution, place its tree alongside the existing
+one using the same `cgate-<version>/cgate/` layout, then:
+
+```bash
+# docker compose (or set CGATE_VERSION in a .env file)
+CGATE_VERSION=3.7.1_2300 docker compose build
+
+# plain docker
+docker build --build-arg CGATE_VERSION=3.7.1_2300 -t cgate-server .
+```
+
+An unknown version fails the build with an error listing the versions actually
+present, rather than producing a broken image.
+
+The resolved version is recorded on the image as the `cgate.version` label, and
+images published by CI carry a matching `cgate-<version>` tag alongside `latest`:
+
+```bash
+docker inspect --format '{{index .Config.Labels "cgate.version"}}' cgate-server:latest
 ```
 
 ### Access Control
