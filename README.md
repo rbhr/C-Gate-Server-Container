@@ -1,6 +1,6 @@
 # C-Gate Server Container
 
-> **v1.1.0**
+> **v1.1.2**
 
 Containerised [SpaceLogic C-Gate Server](https://www.se.com/au/en/product-range/63702-spacelogic-c-gate/) with a built-in web console for testing and debugging C-Bus networks. The bundled C-Gate build is selectable at image build time — see [C-Gate Version](#c-gate-version).
 
