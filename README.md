@@ -1,8 +1,8 @@
 # C-Gate Server Container
 
-> **v1.0.0**
+> **v1.0.1**
 
-Containerised [SpaceLogic C-Gate Server](https://www.se.com/au/en/product-range/63702-spacelogic-c-gate/) (v3.7.0 build 2285) with a built-in web console for testing and debugging C-Bus networks.
+Containerised [SpaceLogic C-Gate Server](https://www.se.com/au/en/product-range/63702-spacelogic-c-gate/) with a built-in web console for testing and debugging C-Bus networks. The bundled C-Gate build is selectable at image build time — see [C-Gate Version](#c-gate-version).
 
 ## Quick Start
 
@@ -86,6 +86,71 @@ tag/
     └── EXAMPLE.db
 ```
 
+### C-Gate Version
+
+The C-Gate distribution bundled into the image is selected by the `CGATE_VERSION`
+build argument, which defaults to `3.7.0_2285`.
+
+To build a different version, unzip the Schneider distribution into
+`C-Gate Downloads/` and build with its version — no `Dockerfile` edit needed:
+
+```bash
+# docker compose (or set CGATE_VERSION in a .env file)
+CGATE_VERSION=3.7.1 docker compose build
+
+# plain docker
+docker build --build-arg CGATE_VERSION=3.7.1 -t cgate-server .
+```
+
+Matching is deliberately lenient, so the vendor zip can be dropped in as-is:
+
+```
+C-Gate Downloads/
+├── cgate-3.7.0_2285/
+│   └── cgate/          ← how the vendor zip extracts
+├── cgate-3.7.1_2300/
+│   └── cgate/
+└── 3.7.2/              ← or flattened, if you prefer
+    └── cgate.jar
+```
+
+`CGATE_VERSION` accepts the exact directory name (`cgate-3.7.1_2300` or
+`3.7.1_2300`) or an unambiguous prefix (`3.7.1`), and locates `cgate.jar` whether
+it sits under a nested `cgate/` folder or directly in the version folder.
+
+The build fails with an actionable message if the version is missing, matches
+more than one directory, or contains no `cgate.jar`:
+
+```
+ERROR: CGATE_VERSION='3.7' is ambiguous. Matches:
+  cgate-3.7.0_2285
+  cgate-3.7.1_2300
+Set CGATE_VERSION to one of these exact directory names.
+```
+
+The build log prints which distribution it resolved to, and its version and
+build number:
+
+```
+Using C-Gate distribution: cgate-3.7.1_2300/cgate
+  Version: 3.7.1
+  Build:   2300
+```
+
+The value you passed is recorded on the image as the `cgate.version` label, and
+images published by CI carry a matching `cgate-<version>` tag alongside `latest`:
+
+```bash
+docker inspect --format '{{index .Config.Labels "cgate.version"}}' cgate-server:latest
+```
+
+Because that label echoes the argument rather than the resolved directory, the
+authoritative build number lives in `/cgate/BuildInfo.txt` inside the image:
+
+```bash
+docker compose exec cgate cat /cgate/BuildInfo.txt
+```
+
 ### Access Control
 
 Edit `config/access.txt` to control which hosts can connect to C-Gate and at what privilege level:
@@ -157,6 +222,10 @@ C-Gate uses a custom [Logback](https://logback.qos.ch/) configuration (`config/l
 - **Rolling file** — Logs are also written to `logs/event.txt` inside the container (mounted at `./C-Gate-Native-Logs` on the host), with daily rotation and a 500 KB size trigger. Up to 10 days of history are retained.
 
 Both appenders run at `DEBUG` level by default. Edit `config/logback.xml` to adjust levels or patterns.
+
+The whole `config/` directory is baked into the image, so `docker run` works without
+any bind mount. The `./config` mount in `docker-compose.yml` overrides it, which is
+what makes edits take effect on a restart rather than a rebuild.
 
 Docker's JSON file log driver adds a second layer of rotation for the stdout stream (10 MB max, 5 rotated files), so container logs stay bounded even if Logback output is verbose.
 

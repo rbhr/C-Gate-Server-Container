@@ -10,6 +10,9 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # C-Gate distribution bundled into the published image. Must match a
+  # directory named "C-Gate Downloads/cgate-<version>/".
+  CGATE_VERSION: 3.7.0_2285
 
 jobs:
   build:
@@ -43,6 +46,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=cgate-${{ env.CGATE_VERSION }},enable={{is_default_branch}}
             type=sha
             type=ref,event=pr
 
@@ -50,6 +54,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          build-args: |
+            CGATE_VERSION=${{ env.CGATE_VERSION }}
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
