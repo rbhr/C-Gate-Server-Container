@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-Containerised Schneider Electric SpaceLogic C-Gate Server with a Go-based web console bridge. The bundled C-Gate build is selected by the `CGATE_VERSION` build arg (default `3.7.0_2285`) — see **C-Gate Version Selection** below. The container packages a proprietary Java application (C-Gate) alongside a custom Go HTTP/WebSocket proxy for browser-based debugging of C-Bus home automation networks.
+Containerised Schneider Electric SpaceLogic C-Gate Server with a Go-based web console bridge. The bundled C-Gate build is selected by the `CGATE_VERSION` build arg (default `3.8.0_2348`) — see **C-Gate Version Selection** below. The container packages a proprietary Java application (C-Gate) alongside a custom Go HTTP/WebSocket proxy for browser-based debugging of C-Bus home automation networks.
 
-**Current version:** v1.0.1 (see `VERSION` file)
+**Current version:** v1.1.0 (see `VERSION` file)
 
 ## Architecture
 
@@ -51,7 +51,7 @@ Docker Container
 ## C-Gate Version Selection
 
 The C-Gate distribution is chosen at image build time via the `CGATE_VERSION`
-build arg (default `3.7.0_2285`), resolved against directories in `C-Gate Downloads/`.
+build arg (default `3.8.0_2348`), resolved against directories in `C-Gate Downloads/`.
 
 Resolution is lenient by design — the goal is "unzip a new distribution into
 `C-Gate Downloads/`, build with its version, change nothing else":

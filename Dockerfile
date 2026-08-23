@@ -3,7 +3,7 @@
 ## Selects which tree under "C-Gate Downloads/cgate-<version>/cgate/" is
 ## installed. Declared before the first FROM so it is global; each stage that
 ## uses it re-declares ARG CGATE_VERSION to pull it into scope.
-ARG CGATE_VERSION=3.7.0_2285
+ARG CGATE_VERSION=3.8.0_2348
 
 ## Stage 1: Build the C-Gate web console bridge
 FROM golang:1.25-alpine AS web-build

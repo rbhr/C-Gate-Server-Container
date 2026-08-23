@@ -1,6 +1,6 @@
 # C-Gate Server Container
 
-> **v1.0.1**
+> **v1.1.0**
 
 Containerised [SpaceLogic C-Gate Server](https://www.se.com/au/en/product-range/63702-spacelogic-c-gate/) with a built-in web console for testing and debugging C-Bus networks. The bundled C-Gate build is selectable at image build time — see [C-Gate Version](#c-gate-version).
 
@@ -89,7 +89,7 @@ tag/
 ### C-Gate Version
 
 The C-Gate distribution bundled into the image is selected by the `CGATE_VERSION`
-build argument, which defaults to `3.7.0_2285`.
+build argument, which defaults to `3.8.0_2348`.
 
 To build a different version, unzip the Schneider distribution into
 `C-Gate Downloads/` and build with its version — no `Dockerfile` edit needed:
