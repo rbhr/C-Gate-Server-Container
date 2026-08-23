@@ -47,28 +47,40 @@ Docker Container
 ## C-Gate Version Selection
 
 The C-Gate distribution is chosen at image build time via the `CGATE_VERSION`
-build arg (default `3.7.0_2285`), which names a directory under `C-Gate Downloads/`:
+build arg (default `3.7.0_2285`), resolved against directories in `C-Gate Downloads/`.
 
-```
-C-Gate Downloads/cgate-<version>/cgate/   →   /cgate in the image
-```
+Resolution is lenient by design — the goal is "unzip a new distribution into
+`C-Gate Downloads/`, build with its version, change nothing else":
+
+1. Exact directory name — `cgate-3.7.1_2300` or `3.7.1_2300`.
+2. Otherwise an unambiguous prefix — `3.7.1` matches `cgate-3.7.1_2300`.
+   Multiple matches are an error listing them, not a silent pick.
+3. Inside the match, `cgate.jar` is located at either `<dir>/cgate/cgate.jar`
+   (how the vendor zip extracts) or `<dir>/cgate.jar` (flattened).
+
+Missing version, ambiguous prefix, and no-`cgate.jar` each fail the build with a
+message naming what was found. The resolved path and `BuildInfo.txt` version and
+build number are echoed into the build log.
 
 Wiring:
-- `Dockerfile` — global `ARG CGATE_VERSION`; the `cgate-dist` stage validates it
-  and stages the tree at `/dist`; the runtime stage does `COPY --from=cgate-dist`
-  and records the value as the `cgate.version` image label.
+- `Dockerfile` — global `ARG CGATE_VERSION`; the `cgate-dist` stage resolves and
+  validates it, staging the tree at `/dist`; the runtime stage does
+  `COPY --from=cgate-dist` and records the value as the `cgate.version` label.
 - `docker-compose.yml` — passes it through `build.args`, overridable with a
   `CGATE_VERSION` env var or `.env` file.
 - `.github/workflows/docker-build.yml` — sets it as a workflow-level env var,
   passes it as a build arg, and publishes a matching `cgate-<version>` image tag.
 
 The version is deliberately **not** repeated in prose — the build arg default in
-`Dockerfile` is the source of truth. An unknown version fails the build with an
-error listing the versions present.
+`Dockerfile` is the source of truth.
 
-The staging stage exists because the source path contains a space, which rules
-out the shell form of `COPY` that expands build args; resolving the version in a
-`RUN` keeps `CGATE_VERSION` out of any `COPY` path.
+Two caveats worth knowing:
+- The `cgate.version` label echoes the *argument*, not the resolved directory, so
+  a prefix build labels the image `3.7.1` while the tree may be `3.7.1_2300`.
+  `/cgate/BuildInfo.txt` in the image is authoritative.
+- The staging stage exists because the source path contains a space, which rules
+  out the shell form of `COPY` that expands build args; resolving in a `RUN`
+  keeps `CGATE_VERSION` out of any `COPY` path.
 
 ## Tag Directory Convention
 

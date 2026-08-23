@@ -89,34 +89,66 @@ tag/
 ### C-Gate Version
 
 The C-Gate distribution bundled into the image is selected by the `CGATE_VERSION`
-build argument, which defaults to `3.7.0_2285`. Its value names a directory under
-`C-Gate Downloads/`:
+build argument, which defaults to `3.7.0_2285`.
 
-```
-C-Gate Downloads/
-└── cgate-3.7.0_2285/
-    └── cgate/          ← contents copied to /cgate in the image
-```
-
-To build against a different distribution, place its tree alongside the existing
-one using the same `cgate-<version>/cgate/` layout, then:
+To build a different version, unzip the Schneider distribution into
+`C-Gate Downloads/` and build with its version — no `Dockerfile` edit needed:
 
 ```bash
 # docker compose (or set CGATE_VERSION in a .env file)
-CGATE_VERSION=3.7.1_2300 docker compose build
+CGATE_VERSION=3.7.1 docker compose build
 
 # plain docker
-docker build --build-arg CGATE_VERSION=3.7.1_2300 -t cgate-server .
+docker build --build-arg CGATE_VERSION=3.7.1 -t cgate-server .
 ```
 
-An unknown version fails the build with an error listing the versions actually
-present, rather than producing a broken image.
+Matching is deliberately lenient, so the vendor zip can be dropped in as-is:
 
-The resolved version is recorded on the image as the `cgate.version` label, and
+```
+C-Gate Downloads/
+├── cgate-3.7.0_2285/
+│   └── cgate/          ← how the vendor zip extracts
+├── cgate-3.7.1_2300/
+│   └── cgate/
+└── 3.7.2/              ← or flattened, if you prefer
+    └── cgate.jar
+```
+
+`CGATE_VERSION` accepts the exact directory name (`cgate-3.7.1_2300` or
+`3.7.1_2300`) or an unambiguous prefix (`3.7.1`), and locates `cgate.jar` whether
+it sits under a nested `cgate/` folder or directly in the version folder.
+
+The build fails with an actionable message if the version is missing, matches
+more than one directory, or contains no `cgate.jar`:
+
+```
+ERROR: CGATE_VERSION='3.7' is ambiguous. Matches:
+  cgate-3.7.0_2285
+  cgate-3.7.1_2300
+Set CGATE_VERSION to one of these exact directory names.
+```
+
+The build log prints which distribution it resolved to, and its version and
+build number:
+
+```
+Using C-Gate distribution: cgate-3.7.1_2300/cgate
+  Version: 3.7.1
+  Build:   2300
+```
+
+The value you passed is recorded on the image as the `cgate.version` label, and
 images published by CI carry a matching `cgate-<version>` tag alongside `latest`:
 
 ```bash
 docker inspect --format '{{index .Config.Labels "cgate.version"}}' cgate-server:latest
+```
+
+Because that label echoes the argument rather than the resolved directory, the
+authoritative build number lives in `/cgate/BuildInfo.txt` inside the image:
+
+```bash
+docker compose exec cgate cat /cgate/BuildInfo.txt
 ```
 
 ### Access Control

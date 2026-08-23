@@ -18,19 +18,63 @@ RUN go mod init cgate-web && \
 ## Staged separately rather than copied straight into the runtime image: the
 ## source path contains a space, so it cannot be written in the shell form of
 ## COPY that expands build args. Resolving the version here keeps CGATE_VERSION
-## out of any COPY path and lets an unknown version fail the build with a clear
+## out of any COPY path, and lets a bad value fail the build with a clear
 ## message instead of producing a broken image.
+##
+## CGATE_VERSION is matched leniently so a freshly unzipped distribution can be
+## dropped into "C-Gate Downloads/" and built with no other changes. It accepts:
+##   - the exact directory name       cgate-3.7.1_2300  /  3.7.1_2300
+##   - an unambiguous prefix          3.7.1  ->  cgate-3.7.1_2300
+## and either layout inside that directory:
+##   - <dir>/cgate/cgate.jar          (how the vendor zip extracts)
+##   - <dir>/cgate.jar                (contents moved up a level)
 FROM eclipse-temurin:11-jre AS cgate-dist
 ARG CGATE_VERSION
 COPY ["C-Gate Downloads/", "/downloads/"]
 RUN set -eu; \
-    src="/downloads/cgate-${CGATE_VERSION}/cgate"; \
-    if [ ! -d "$src" ]; then \
-        echo "ERROR: no C-Gate distribution for CGATE_VERSION='${CGATE_VERSION}'" >&2; \
-        echo "Expected directory: C-Gate Downloads/cgate-${CGATE_VERSION}/cgate/" >&2; \
-        echo "Available versions:" >&2; \
-        ls -1 /downloads | sed -n 's/^cgate-/  /p' >&2; \
+    matched=""; \
+    set --; \
+    for d in /downloads/*/; do \
+        [ -d "$d" ] || continue; \
+        d="${d%/}"; b="${d##*/}"; \
+        if [ "$b" = "${CGATE_VERSION}" ] || [ "$b" = "cgate-${CGATE_VERSION}" ]; then \
+            set -- "$d"; matched=exact; break; \
+        fi; \
+    done; \
+    if [ -z "$matched" ]; then \
+        for d in /downloads/*/; do \
+            [ -d "$d" ] || continue; \
+            d="${d%/}"; b="${d##*/}"; \
+            case "$b" in \
+                "${CGATE_VERSION}"*|"cgate-${CGATE_VERSION}"*) set -- "$@" "$d" ;; \
+            esac; \
+        done; \
+    fi; \
+    if [ "$#" -eq 0 ]; then \
+        echo "ERROR: no C-Gate distribution matches CGATE_VERSION='${CGATE_VERSION}'" >&2; \
+        echo "Looked under 'C-Gate Downloads/' for a directory named or starting with" >&2; \
+        echo "'${CGATE_VERSION}' or 'cgate-${CGATE_VERSION}'. Present:" >&2; \
+        ls -1 /downloads 2>/dev/null | sed 's/^/  /' >&2; \
         exit 1; \
+    fi; \
+    if [ "$#" -gt 1 ]; then \
+        echo "ERROR: CGATE_VERSION='${CGATE_VERSION}' is ambiguous. Matches:" >&2; \
+        for d in "$@"; do echo "  ${d##*/}" >&2; done; \
+        echo "Set CGATE_VERSION to one of these exact directory names." >&2; \
+        exit 1; \
+    fi; \
+    dir="$1"; \
+    if [ -f "$dir/cgate/cgate.jar" ]; then src="$dir/cgate"; \
+    elif [ -f "$dir/cgate.jar" ]; then src="$dir"; \
+    else \
+        echo "ERROR: no cgate.jar found under '${dir##*/}'" >&2; \
+        echo "Expected '${dir##*/}/cgate/cgate.jar' (vendor zip layout)" >&2; \
+        echo "      or '${dir##*/}/cgate.jar'." >&2; \
+        exit 1; \
+    fi; \
+    echo "Using C-Gate distribution: ${src#/downloads/}"; \
+    if [ -f "$src/BuildInfo.txt" ]; then \
+        sed -n 's/^\(Version\|Build\):[[:space:]]*/  &/p' "$src/BuildInfo.txt"; \
     fi; \
     mkdir -p /dist; \
     cp -a "$src/." /dist/
