@@ -223,6 +223,10 @@ C-Gate uses a custom [Logback](https://logback.qos.ch/) configuration (`config/l
 
 Both appenders run at `DEBUG` level by default. Edit `config/logback.xml` to adjust levels or patterns.
 
+The whole `config/` directory is baked into the image, so `docker run` works without
+any bind mount. The `./config` mount in `docker-compose.yml` overrides it, which is
+what makes edits take effect on a restart rather than a rebuild.
+
 Docker's JSON file log driver adds a second layer of rotation for the stdout stream (10 MB max, 5 rotated files), so container logs stay bounded even if Logback output is verbose.
 
 ```bash

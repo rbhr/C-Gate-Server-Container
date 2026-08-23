@@ -24,6 +24,10 @@ Docker Container
 
 - `entrypoint.sh` starts the Go bridge in a restart loop, then `exec`s the Java process as PID 1.
 - Logback config (`config/logback.xml`) is injected via `-Dlogback.configurationFile` JVM flag.
+- The Dockerfile copies the whole `config/` directory, not named files, so the image is
+  self-contained without a bind mount. Copying files individually had omitted
+  `logback.xml`, leaving that JVM flag pointing at a nonexistent path under plain
+  `docker run`. Add config files freely — they ship automatically.
 - The Go binary is built in a multi-stage Docker build (`golang:1.25-alpine` → `eclipse-temurin:11-jre`).
 - A `cgate-dist` build stage resolves `CGATE_VERSION` to a distribution tree and stages it at `/dist`, so the runtime stage can `COPY --from` a fixed path.
 

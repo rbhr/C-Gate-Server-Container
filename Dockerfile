@@ -101,9 +101,14 @@ RUN mkdir -p /cgate/tag /cgate/config /cgate/logs
 COPY --from=cgate-dist /dist/ /cgate/
 
 # Default config and tag files are copied in but expected to be
-# overridden by bind mounts at runtime
-COPY config/access.txt /cgate/config/access.txt
-COPY config/C-groups.txt /cgate/config/C-groups.txt
+# overridden by bind mounts at runtime.
+#
+# The whole config/ directory is copied rather than named files: entrypoint.sh
+# passes -Dlogback.configurationFile=/cgate/config/logback.xml, and copying
+# files individually had silently omitted logback.xml, so a plain `docker run`
+# without a ./config bind mount started with no logback config at all. A
+# directory copy also means a future config file cannot be missed the same way.
+COPY config/ /cgate/config/
 COPY tag/ /cgate/tag/
 
 # Copy web console bridge binary
