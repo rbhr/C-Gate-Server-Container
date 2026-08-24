@@ -137,6 +137,13 @@ RUN chmod +x /cgate/entrypoint.sh
 
 WORKDIR /cgate
 
+# Liveness only. /health answers 200 whenever the bridge is serving, so this
+# reports "unhealthy" for a dead bridge, not for a C-Gate that is merely still
+# syncing. Use /ready (503 until every C-Gate connection is up) to gate clients;
+# probing it here would flap the container through a normal cold start.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -fsS http://localhost:8980/health || exit 1
+
 # Launch via entrypoint wrapper (starts web bridge, then execs C-Gate)
 ENTRYPOINT ["sh", "/cgate/entrypoint.sh"]
 
