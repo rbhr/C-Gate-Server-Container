@@ -4,7 +4,7 @@
 
 Containerised Schneider Electric SpaceLogic C-Gate Server with a Go-based web console bridge. The bundled C-Gate build is selected by the `CGATE_VERSION` build arg (default `3.8.0_2348`) — see **C-Gate Version Selection** below. The container packages a proprietary Java application (C-Gate) alongside a custom Go HTTP/WebSocket proxy for browser-based debugging of C-Bus home automation networks.
 
-**Current version:** v1.1.2 (see `VERSION` file)
+**Current version:** v1.1.3 (see `VERSION` file)
 
 ## Architecture
 
@@ -19,10 +19,27 @@ Docker Container
     ├── /        → embedded console.html (single-page terminal UI)
     ├── /cgate   → HTTP command API (GET with ?cmd= param)
     ├── /ws      → WebSocket stream (events, status, commands, responses)
-    └── /health  → health check endpoint
+    ├── /health  → liveness — always 200 while the bridge serves
+    └── /ready   → readiness — 503 until all C-Gate connections are up
 ```
 
 - `entrypoint.sh` starts the Go bridge in a restart loop, then `exec`s the Java process as PID 1.
+- `/health` and `/ready` are deliberately different probes. `/health` answers 200
+  whenever the bridge is serving, because it is what decides whether to restart
+  the container and C-Gate needs up to a minute to sync its networks on a cold
+  start — failing it during that window turns a normal boot into a restart loop.
+  `/ready` answers 503 until the command, event and status connections are all
+  established, so a client can hold its initial poll instead of retrying into
+  `408 Operation failed`. Both return the same body, so `/health` no longer
+  reports a fixed `ok` while C-Gate is unreachable. Neither tracks C-Gate's
+  *network* state: a project can still be mid-sync when `/ready` first passes.
+- The stream connections (20024/20025) carry **no read deadline**, by design.
+  Both ends are on localhost in the same container, so a dead peer surfaces as
+  an immediate EOF/RST, not a hang; a deadline could only fire on a healthy but
+  quiet port. Both ports are legitimately quiet — the event interface emits
+  nothing at the default `global-event-level`, and the status interface goes
+  silent on an idle site — so the old 5-minute deadline reconnected forever and
+  dropped any line arriving during the 2s gap. TCP keepalive is the backstop.
 - Logback config (`config/logback.xml`) is injected via `-Dlogback.configurationFile` JVM flag.
 - The Dockerfile copies the whole `config/` directory, not named files, so the image is
   self-contained without a bind mount. Copying files individually had omitted

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/websocket"
@@ -27,10 +28,6 @@ const (
 
 	// TCP keepalive interval for long-lived connections
 	keepAliveInterval = 30 * time.Second
-
-	// Read deadline for stream connections — if nothing arrives within
-	// this window we assume the connection is dead and reconnect.
-	streamReadDeadline = 5 * time.Minute
 
 	// How often to send a heartbeat on the command connection to keep
 	// it alive through NAT/firewalls and detect silent drops.
@@ -76,6 +73,16 @@ func (h *wsHub) broadcast(msg map[string]string) {
 
 var hub = newHub()
 
+// Connection state for the health/ready endpoints. Written by the goroutines
+// owning each connection, read by HTTP handlers, so these are atomic rather
+// than guarded by the command session's mutex — a readiness probe must not
+// block behind an in-flight command.
+var (
+	eventStreamUp  atomic.Bool
+	statusStreamUp atomic.Bool
+	commandUp      atomic.Bool
+)
+
 // dialTCP connects to a C-Gate port with retries and enables TCP keepalive
 func dialTCP(port string) net.Conn {
 	addr := net.JoinHostPort(cgateHost, port)
@@ -96,31 +103,38 @@ func dialTCP(port string) net.Conn {
 }
 
 // streamPort reads lines from a C-Gate port and broadcasts them.
-// Reconnects automatically on any error or timeout.
-func streamPort(port, streamName string) {
+// Reconnects automatically when the connection drops.
+//
+// There is deliberately no read deadline on these connections. Both ends live
+// in the same container (cgateHost is localhost), so "peer died without
+// closing the socket" is not a failure mode reachable here — if C-Gate exits,
+// the read returns EOF/RST straight away and the reconnect below handles it.
+// A deadline could therefore only ever fire on a healthy but quiet port, and
+// both ports are legitimately quiet: the event interface emits nothing at the
+// default global-event-level, and the status interface goes silent on an idle
+// site. Tearing the connection down in that case cost a reconnect every
+// deadline period and dropped any line arriving during it. TCP keepalive (see
+// dialTCP) stays as the backstop for the connection genuinely going away.
+func streamPort(port, streamName string, up *atomic.Bool) {
 	for {
 		conn := dialTCP(port)
+		up.Store(true)
 		scanner := bufio.NewScanner(conn)
-		alive := true
-		for alive {
-			// Set a read deadline so we detect dead connections even when
-			// C-Gate is quiet (no events/status changes for a while).
-			conn.SetReadDeadline(time.Now().Add(streamReadDeadline))
-			if scanner.Scan() {
-				line := scanner.Text()
-				hub.broadcast(map[string]string{
-					"stream": streamName,
-					"data":   line,
-					"time":   time.Now().Format("15:04:05"),
-				})
-			} else {
-				alive = false
-			}
+		// C-Gate lines are short, but don't let one unusually long line kill
+		// the stream with ErrTooLong and send us into a reconnect loop.
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			hub.broadcast(map[string]string{
+				"stream": streamName,
+				"data":   scanner.Text(),
+				"time":   time.Now().Format("15:04:05"),
+			})
 		}
+		up.Store(false)
 		if err := scanner.Err(); err != nil {
-			log.Printf("Stream %s error: %v — reconnecting", streamName, err)
+			log.Printf("Stream %s connection lost: %v — reconnecting", streamName, err)
 		} else {
-			log.Printf("Stream %s disconnected (EOF) — reconnecting", streamName)
+			log.Printf("Stream %s closed by C-Gate (EOF) — reconnecting", streamName)
 		}
 		conn.Close()
 		time.Sleep(2 * time.Second)
@@ -150,10 +164,12 @@ func (s *commandSession) connect() {
 		_ = line
 	}
 	s.conn.SetReadDeadline(time.Time{})
+	commandUp.Store(true)
 	log.Printf("Command session: ready")
 }
 
 func (s *commandSession) reconnect() {
+	commandUp.Store(false)
 	log.Printf("Command session: reconnecting")
 	if s.conn != nil {
 		s.conn.Close()
@@ -269,17 +285,55 @@ func handleWS(ws *websocket.Conn) {
 	}
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
+// writeStatus renders the shared health/ready body.
+func writeStatus(w http.ResponseWriter, code int) {
+	event, status, command := eventStreamUp.Load(), statusStreamUp.Load(), commandUp.Load()
+	state := "degraded"
+	if event && status && command {
+		state = "ok"
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"ok"}`))
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": state,
+		"connections": map[string]bool{
+			"command": command,
+			"event":   event,
+			"status":  status,
+		},
+	})
+}
+
+// handleHealth reports liveness: the bridge is up and serving. It returns 200
+// even when C-Gate is unreachable, because callers use this to decide whether
+// to restart the container and C-Gate needs up to a minute to sync its
+// networks on a cold start — failing the probe during that window would turn
+// a normal startup into a restart loop. The body carries the real detail.
+// Gate on /ready instead if you need C-Gate itself to be up.
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeStatus(w, http.StatusOK)
+}
+
+// handleReady reports readiness: every connection the bridge needs is
+// established. Returns 503 until then, so clients can hold off their initial
+// poll rather than retrying into "408 Operation failed" while C-Gate starts.
+//
+// This tracks the bridge's own TCP connections, not C-Gate's network state —
+// a project can still be mid-sync when this first returns 200.
+func handleReady(w http.ResponseWriter, r *http.Request) {
+	code := http.StatusOK
+	if !(eventStreamUp.Load() && statusStreamUp.Load() && commandUp.Load()) {
+		code = http.StatusServiceUnavailable
+	}
+	writeStatus(w, code)
 }
 
 func main() {
 	log.Printf("C-Gate Web Console starting on %s", listenAddr)
 
 	// Start streaming from event and status ports
-	go streamPort(cgateEventPort, "event")
-	go streamPort(cgateStatusPort, "status")
+	go streamPort(cgateEventPort, "event", &eventStreamUp)
+	go streamPort(cgateStatusPort, "status", &statusStreamUp)
 
 	// Initialize command connection and start heartbeat
 	go func() {
@@ -297,6 +351,7 @@ func main() {
 	})
 	http.HandleFunc("/cgate", handleCGate)
 	http.HandleFunc("/health", handleHealth)
+	http.HandleFunc("/ready", handleReady)
 	http.Handle("/ws", websocket.Handler(handleWS))
 
 	log.Fatal(http.ListenAndServe(listenAddr, nil))

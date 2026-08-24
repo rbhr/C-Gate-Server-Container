@@ -1,6 +1,6 @@
 # C-Gate Server Container
 
-> **v1.1.2**
+> **v1.1.3**
 
 Containerised [SpaceLogic C-Gate Server](https://www.se.com/au/en/product-range/63702-spacelogic-c-gate/) with a built-in web console for testing and debugging C-Bus networks. The bundled C-Gate build is selectable at image build time — see [C-Gate Version](#c-gate-version).
 
@@ -69,6 +69,36 @@ curl "http://localhost:8980/cgate?cmd=RAMP%20//HOME/254/56/120%2050%25%204s"
 # Get all group levels on an application
 curl "http://localhost:8980/cgate?cmd=GET%20//HOME/254/56/*%20level"
 ```
+
+### Health and readiness
+
+Two probes, for two different questions:
+
+| Endpoint | Answers | Use it to |
+|----------|---------|-----------|
+| `/health` | Is the bridge serving? Always `200` while it is. | Decide whether to restart the container. |
+| `/ready` | Are all C-Gate connections up? `503` until they are. | Gate a client's first poll. |
+
+Both return the same body:
+
+```json
+{
+  "status": "ok",
+  "connections": { "command": true, "event": true, "status": true }
+}
+```
+
+`/health` stays `200` even when C-Gate is unreachable — it is a liveness probe,
+and C-Gate can take up to a minute to sync its networks on a cold start, so
+failing it during that window would turn a normal boot into a restart loop.
+Read `status` in the body for the real picture.
+
+Wait for `/ready` before polling group levels. Commands issued while C-Gate is
+still syncing return `408 Operation failed`; this is expected and self-clearing,
+so gate on readiness rather than building a retry loop around it. Note that
+`/ready` reflects the bridge's own connections, not C-Gate's network state — a
+project can still be mid-sync when it first passes, so treat a `408` after that
+point as transient too.
 
 ## Configuration
 
