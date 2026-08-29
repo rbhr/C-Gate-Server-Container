@@ -1,6 +1,6 @@
 # C-Gate Server Container
 
-> **v1.1.3**
+> **v1.1.4**
 
 Containerised [SpaceLogic C-Gate Server](https://www.se.com/au/en/product-range/63702-spacelogic-c-gate/) with a built-in web console for testing and debugging C-Bus networks. The bundled C-Gate build is selectable at image build time — see [C-Gate Version](#c-gate-version).
 
@@ -99,6 +99,10 @@ so gate on readiness rather than building a retry loop around it. Note that
 `/ready` reflects the bridge's own connections, not C-Gate's network state — a
 project can still be mid-sync when it first passes, so treat a `408` after that
 point as transient too.
+
+A command sent while C-Gate is down returns `502` immediately rather than
+blocking until it comes back, and the bridge reconnects on its own within a few
+seconds of C-Gate returning — no request is needed to prompt it.
 
 ## Configuration
 

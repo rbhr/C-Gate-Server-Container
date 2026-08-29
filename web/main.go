@@ -29,6 +29,15 @@ const (
 	// TCP keepalive interval for long-lived connections
 	keepAliveInterval = 30 * time.Second
 
+	// How long a single dial attempt gets before it is given up on.
+	dialTimeout = 5 * time.Second
+
+	// How long to wait before dialling again after a failed attempt.
+	dialRetryInterval = 3 * time.Second
+
+	// Per-line read deadline for a command.
+	commandReadDeadline = 5 * time.Second
+
 	// How often to send a heartbeat on the command connection to keep
 	// it alive through NAT/firewalls and detect silent drops.
 	commandHeartbeat = 2 * time.Minute
@@ -83,22 +92,36 @@ var (
 	commandUp      atomic.Bool
 )
 
-// dialTCP connects to a C-Gate port with retries and enables TCP keepalive
-func dialTCP(port string) net.Conn {
+// dialCGate makes one attempt to connect to a C-Gate port, enabling TCP
+// keepalive on success. It reports failure rather than retrying, so a caller
+// holding a lock can bound how long it is prepared to wait.
+func dialCGate(port string) (net.Conn, error) {
+	addr := net.JoinHostPort(cgateHost, port)
+	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	// Enable TCP keepalive so the OS detects dead connections
+	if tc, ok := conn.(*net.TCPConn); ok {
+		tc.SetKeepAlive(true)
+		tc.SetKeepAlivePeriod(keepAliveInterval)
+	}
+	log.Printf("Connected to C-Gate %s", addr)
+	return conn, nil
+}
+
+// dialCGateForever retries until it connects. Only safe on a goroutine that
+// blocks nothing but itself — the stream readers qualify, the command session
+// does not.
+func dialCGateForever(port string) net.Conn {
 	addr := net.JoinHostPort(cgateHost, port)
 	for {
-		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+		conn, err := dialCGate(port)
 		if err == nil {
-			// Enable TCP keepalive so the OS detects dead connections
-			if tc, ok := conn.(*net.TCPConn); ok {
-				tc.SetKeepAlive(true)
-				tc.SetKeepAlivePeriod(keepAliveInterval)
-			}
-			log.Printf("Connected to C-Gate %s", addr)
 			return conn
 		}
 		log.Printf("Waiting for C-Gate on %s: %v", addr, err)
-		time.Sleep(3 * time.Second)
+		time.Sleep(dialRetryInterval)
 	}
 }
 
@@ -114,10 +137,10 @@ func dialTCP(port string) net.Conn {
 // default global-event-level, and the status interface goes silent on an idle
 // site. Tearing the connection down in that case cost a reconnect every
 // deadline period and dropped any line arriving during it. TCP keepalive (see
-// dialTCP) stays as the backstop for the connection genuinely going away.
+// dialCGate) stays as the backstop for the connection genuinely going away.
 func streamPort(port, streamName string, up *atomic.Bool) {
 	for {
-		conn := dialTCP(port)
+		conn := dialCGateForever(port)
 		up.Store(true)
 		scanner := bufio.NewScanner(conn)
 		// C-Gate lines are short, but don't let one unusually long line kill
@@ -150,44 +173,87 @@ type commandSession struct {
 
 var cmdSession = &commandSession{}
 
-func (s *commandSession) connect() {
+// connect dials the command port and drains C-Gate's banner.
+//
+// One attempt, reporting failure rather than retrying: this runs with s.mu
+// held, and waiting there is what used to hang the bridge. maintain() does the
+// waiting instead.
+func (s *commandSession) connect() error {
 	log.Printf("Command session: connecting to C-Gate command port %s", cgateCommandPort)
-	s.conn = dialTCP(cgateCommandPort)
-	s.reader = bufio.NewReader(s.conn)
+	conn, err := dialCGate(cgateCommandPort)
+	if err != nil {
+		return fmt.Errorf("connecting to C-Gate command port: %w", err)
+	}
+	s.conn = conn
+	s.reader = bufio.NewReader(conn)
 	// Drain the connect banner
-	s.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	for {
-		line, err := s.reader.ReadString('\n')
-		if err != nil {
+		if _, err := s.reader.ReadString('\n'); err != nil {
 			break
 		}
-		_ = line
 	}
-	s.conn.SetReadDeadline(time.Time{})
+	conn.SetReadDeadline(time.Time{})
 	commandUp.Store(true)
 	log.Printf("Command session: ready")
+	return nil
 }
 
-func (s *commandSession) reconnect() {
+// drop closes the command connection and marks the session down, leaving
+// maintain() to rebuild it.
+//
+// Redialling here instead — which is what reconnect() used to do — means
+// dialling with s.mu held. C-Gate is routinely down for minutes at a time (a
+// restart, a project reload, a reboot) and the dial retried forever, so every
+// /cgate request queued behind it for the whole outage while /health went on
+// reporting the bridge as serving. Failing the request and letting a
+// background goroutine wait is what keeps an outage off the HTTP path.
+//
+// Must be called with s.mu held.
+func (s *commandSession) drop() {
 	commandUp.Store(false)
-	log.Printf("Command session: reconnecting")
 	if s.conn != nil {
 		s.conn.Close()
+		s.conn = nil
+		s.reader = nil
 	}
-	s.connect()
 }
 
-// heartbeat periodically sends a noop command to keep the command
-// connection alive and detect silent drops before a real command fails.
-func (s *commandSession) heartbeat() {
+// maintain keeps the command session connected and proves it is still alive.
+//
+// It is the only place that waits for C-Gate: it reconnects when the session
+// is down, and once up sends a periodic noop to detect a silent drop before a
+// real command runs into it.
+func (s *commandSession) maintain() {
+	// Polled on the short interval rather than slept through the heartbeat
+	// one, so a session that drops between heartbeats is rebuilt promptly. On
+	// the long interval the loop would not notice for up to commandHeartbeat,
+	// leaving recovery to whichever request happened to come along next —
+	// which on an idle console is no recovery at all.
+	nextHeartbeat := time.Now().Add(commandHeartbeat)
 	for {
-		time.Sleep(commandHeartbeat)
-		_, err := s.send("noop")
-		if err != nil {
-			log.Printf("Command session: heartbeat failed: %v", err)
-		} else {
-			log.Printf("Command session: heartbeat ok")
+		switch {
+		case !commandUp.Load():
+			s.mu.Lock()
+			s.drop()
+			err := s.connect()
+			s.mu.Unlock()
+			if err != nil {
+				log.Printf("Command session: %v — retrying in %s", err, dialRetryInterval)
+			} else {
+				nextHeartbeat = time.Now().Add(commandHeartbeat)
+			}
+
+		case time.Now().After(nextHeartbeat):
+			if _, err := s.send("noop"); err != nil {
+				log.Printf("Command session: heartbeat failed: %v", err)
+			} else {
+				log.Printf("Command session: heartbeat ok")
+			}
+			nextHeartbeat = time.Now().Add(commandHeartbeat)
 		}
+
+		time.Sleep(dialRetryInterval)
 	}
 }
 
@@ -196,18 +262,27 @@ func (s *commandSession) send(cmd string) ([]string, error) {
 	defer s.mu.Unlock()
 
 	if s.conn == nil {
-		s.connect()
+		// One attempt. maintain() is what waits out an outage; a request
+		// arriving during one is answered with an error, not a hang.
+		if err := s.connect(); err != nil {
+			return nil, err
+		}
 	}
 
 	log.Printf("Command session: sending %q", cmd)
 
-	_, err := fmt.Fprintf(s.conn, "%s\r\n", cmd)
-	if err != nil {
+	if _, err := fmt.Fprintf(s.conn, "%s\r\n", cmd); err != nil {
+		// A failed write usually means C-Gate restarted under a session that
+		// looked fine. One reconnect and resend covers that transparently; if
+		// the reconnect fails too, report it rather than waiting.
 		log.Printf("Command session: write failed: %v — reconnecting", err)
-		s.reconnect()
-		_, err = fmt.Fprintf(s.conn, "%s\r\n", cmd)
-		if err != nil {
+		s.drop()
+		if err := s.connect(); err != nil {
+			return nil, err
+		}
+		if _, err := fmt.Fprintf(s.conn, "%s\r\n", cmd); err != nil {
 			log.Printf("Command session: write failed after reconnect: %v", err)
+			s.drop()
 			return nil, err
 		}
 	}
@@ -215,14 +290,17 @@ func (s *commandSession) send(cmd string) ([]string, error) {
 	// Read response lines
 	var lines []string
 	for {
-		s.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		s.conn.SetReadDeadline(time.Now().Add(commandReadDeadline))
 		line, err := s.reader.ReadString('\n')
 		if err != nil {
 			if len(lines) > 0 {
 				break // got at least some response
 			}
-			log.Printf("Command session: read failed: %v — reconnecting", err)
-			s.reconnect()
+			// Deliberately not resent: the command may already have taken
+			// effect at the far end, and repeating an ON is worse than
+			// reporting the failure.
+			log.Printf("Command session: read failed: %v — dropping the session", err)
+			s.drop()
 			return nil, err
 		}
 		line = strings.TrimRight(line, "\r\n")
@@ -335,13 +413,10 @@ func main() {
 	go streamPort(cgateEventPort, "event", &eventStreamUp)
 	go streamPort(cgateStatusPort, "status", &statusStreamUp)
 
-	// Initialize command connection and start heartbeat
-	go func() {
-		cmdSession.mu.Lock()
-		cmdSession.connect()
-		cmdSession.mu.Unlock()
-		go cmdSession.heartbeat()
-	}()
+	// Keep the command connection up. Backgrounded rather than blocking
+	// startup: the console has to be reachable while C-Gate is down, which is
+	// exactly when someone wants to look at it.
+	go cmdSession.maintain()
 
 	// Routes
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
