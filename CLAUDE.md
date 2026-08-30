@@ -140,7 +140,22 @@ Both at DEBUG level. Pattern: `%msg%n` (raw C-Gate output, no timestamps — C-G
 
 ## Development Notes
 
-- **No test suite** — this is a containerised wrapper around a proprietary Java application. Validation is done by building the image and running the container.
+- **The Go bridge has unit tests** (`web/main_test.go`), run by the `Go bridge tests` CI job
+  and locally with the toolchain the image uses:
+
+  ```sh
+  docker run --rm -v "$PWD/web":/src:ro -w /tmp/b golang:1.25-alpine sh -c '
+  cp /src/main.go /src/main_test.go /src/console.html . &&
+  go mod init cgate-web >/dev/null 2>&1 &&
+  go get golang.org/x/net/websocket >/dev/null 2>&1 &&
+  gofmt -l . && go vet ./... && go test -race ./...'
+  ```
+
+  `go.mod`/`go.sum` are not committed — the Dockerfile synthesises them at build time, and
+  so do the test job and the command above. Adding a `.go` file means updating the
+  Dockerfile's `COPY` line, but **not** for `main_test.go`: tests never go into the image.
+- **C-Gate itself has no test suite** — it is a proprietary Java application, so anything
+  touching its behaviour is validated by building the image and running the container.
 - **Go web bridge** has no external dependencies beyond `golang.org/x/net/websocket`. No go.mod is committed — it's generated during Docker build (`go mod init`).
 - **C-Gate jar and libs are binary blobs** checked into `C-Gate Downloads/`. Do not modify these.
 - The `com/` directory (gitignored) contains a compiled Java class (`InvalidLogbackConfigException.class`) that is a C-Gate runtime artifact — leave it alone.

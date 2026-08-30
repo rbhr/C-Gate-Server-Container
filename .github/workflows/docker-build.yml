@@ -15,6 +15,29 @@ env:
   CGATE_VERSION: 3.8.0_2348
 
 jobs:
+  test:
+    name: Go bridge tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      # go.mod is not committed -- the Dockerfile synthesises it at build time,
+      # so the test job does the same rather than adding one just for CI.
+      - name: Test
+        working-directory: web
+        run: |
+          go mod init cgate-web
+          go get golang.org/x/net/websocket
+          gofmt -l .
+          go vet ./...
+          go test -race -v ./...
+
   build:
     runs-on: ubuntu-latest
     permissions:
