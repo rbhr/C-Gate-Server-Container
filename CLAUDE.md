@@ -4,7 +4,7 @@
 
 Containerised Schneider Electric SpaceLogic C-Gate Server with a Go-based web console bridge. The bundled C-Gate build is selected by the `CGATE_VERSION` build arg (default `3.8.0_2348`) — see **C-Gate Version Selection** below. The container packages a proprietary Java application (C-Gate) alongside a custom Go HTTP/WebSocket proxy for browser-based debugging of C-Bus home automation networks.
 
-**Current version:** v1.1.3 (see `VERSION` file)
+**Current version:** v1.1.4 (see `VERSION` file)
 
 ## Architecture
 
@@ -33,6 +33,22 @@ Docker Container
   `408 Operation failed`. Both return the same body, so `/health` no longer
   reports a fixed `ok` while C-Gate is unreachable. Neither tracks C-Gate's
   *network* state: a project can still be mid-sync when `/ready` first passes.
+- **Nothing dials C-Gate with `cmdSession.mu` held for longer than one attempt.**
+  `connect()` makes a single bounded dial and returns an error, `drop()` closes
+  the session and marks it down without redialling, and `maintain()` is the one
+  goroutine allowed to wait. `dialTCP` used to retry forever and `send()` called
+  it under the mutex, so every request queued behind that dial for the whole of
+  a C-Gate restart while `/health` still reported the bridge as serving. If you
+  add a path that reconnects, reconnect through `maintain()`, not under the lock.
+  `dialCGateForever` keeps the unbounded behaviour for the two stream readers,
+  which block nothing but themselves.
+- `maintain()` polls on `dialRetryInterval`, not on `commandHeartbeat`. Sleeping
+  the heartbeat interval would leave a session that dropped between heartbeats
+  unrebuilt until the next one — on an idle console, not rebuilt at all.
+- `web/main.go` here and `ha-app-C-Gate-Server/cgate-server/web/main.go` are
+  parallel implementations of the same bridge, not one shared file. Everything
+  above is common to both and worth keeping textually identical so the two stay
+  diffable; the project-database handlers belong to the add-on alone.
 - The stream connections (20024/20025) carry **no read deadline**, by design.
   Both ends are on localhost in the same container, so a dead peer surfaces as
   an immediate EOF/RST, not a hang; a deadline could only fire on a healthy but
@@ -124,7 +140,22 @@ Both at DEBUG level. Pattern: `%msg%n` (raw C-Gate output, no timestamps — C-G
 
 ## Development Notes
 
-- **No test suite** — this is a containerised wrapper around a proprietary Java application. Validation is done by building the image and running the container.
+- **The Go bridge has unit tests** (`web/main_test.go`), run by the `Go bridge tests` CI job
+  and locally with the toolchain the image uses:
+
+  ```sh
+  docker run --rm -v "$PWD/web":/src:ro -w /tmp/b golang:1.25-alpine sh -c '
+  cp /src/main.go /src/main_test.go /src/console.html . &&
+  go mod init cgate-web >/dev/null 2>&1 &&
+  go get golang.org/x/net/websocket >/dev/null 2>&1 &&
+  gofmt -l . && go vet ./... && go test -race ./...'
+  ```
+
+  `go.mod`/`go.sum` are not committed — the Dockerfile synthesises them at build time, and
+  so do the test job and the command above. Adding a `.go` file means updating the
+  Dockerfile's `COPY` line, but **not** for `main_test.go`: tests never go into the image.
+- **C-Gate itself has no test suite** — it is a proprietary Java application, so anything
+  touching its behaviour is validated by building the image and running the container.
 - **Go web bridge** has no external dependencies beyond `golang.org/x/net/websocket`. No go.mod is committed — it's generated during Docker build (`go mod init`).
 - **C-Gate jar and libs are binary blobs** checked into `C-Gate Downloads/`. Do not modify these.
 - The `com/` directory (gitignored) contains a compiled Java class (`InvalidLogbackConfigException.class`) that is a C-Gate runtime artifact — leave it alone.
