@@ -4,7 +4,7 @@
 
 Containerised Schneider Electric SpaceLogic C-Gate Server with a Go-based web console bridge. The bundled C-Gate build is selected by the `CGATE_VERSION` build arg (default `3.8.0_2348`) — see **C-Gate Version Selection** below. The container packages a proprietary Java application (C-Gate) alongside a custom Go HTTP/WebSocket proxy for browser-based debugging of C-Bus home automation networks.
 
-**Current version:** v1.1.4 (see `VERSION` file)
+**Current version:** v1.2.0 (see `VERSION` file)
 
 ## Architecture
 
@@ -48,7 +48,10 @@ Docker Container
 - `web/main.go` here and `ha-app-C-Gate-Server/cgate-server/web/main.go` are
   parallel implementations of the same bridge, not one shared file. Everything
   above is common to both and worth keeping textually identical so the two stay
-  diffable; the project-database handlers belong to the add-on alone.
+  diffable — including the project-database half, which since 1.2.0 lives in
+  both. See **The project-database half** below for the three places the two
+  copies are allowed to differ, and keep any new difference on that list or out
+  of the code.
 - The stream connections (20024/20025) carry **no read deadline**, by design.
   Both ends are on localhost in the same container, so a dead peer surfaces as
   an immediate EOF/RST, not a hang; a deadline could only fire on a healthy but
@@ -64,6 +67,43 @@ Docker Container
 - The Go binary is built in a multi-stage Docker build (`golang:1.25-alpine` → `eclipse-temurin:11-jre`).
 - A `cgate-dist` build stage resolves `CGATE_VERSION` to a distribution tree and stages it at `/dist`, so the runtime stage can `COPY --from` a fixed path.
 
+## The project-database half
+
+`/tag`, `/tag/download`, `/tag/archive` and `/tag/upload`, and the console panel
+in front of them, are shared with `ha-app-C-Gate-Server` and were ported from it
+verbatim. `diff` that block against the add-on's copy and only the three
+differences below should appear; anything else in it has drifted.
+
+(The connection layer above it also carries some older cosmetic drift — this
+copy logs more, and a few comments were reworded on one side only. Worth
+converging opportunistically, but it is not what this list is about.)
+
+1. **Where projects live.** `projectsDir` defaults to `/cgate/tag` here and
+   `/data/projects` in the add-on. Both honour `CGATE_PROJECTS_DIR`.
+2. **How the active project is found.** The add-on's `run.sh` knows the project
+   from the add-on options and exports `CGATE_PROJECT`, so there it is a plain
+   variable. Nothing here knows it, so `activeProject()` asks C-Gate —
+   `PROJECT USE` with no argument answers `123 project=NAME` — and caches the
+   answer. `CGATE_PROJECT` still overrides. A *failed* query is deliberately not
+   cached, so a console opened during an outage picks the project up once
+   C-Gate returns.
+3. **Routing, and `base` in `console.html`.** `route()` here builds a
+   `http.ServeMux`; the add-on's routes by hand because a mux answers 301 to a
+   cleaned path, which under ingress sends the panel iframe to the Home
+   Assistant dashboard. For the same reason the add-on's console derives a base
+   path for its API calls and this one uses `''`.
+
+The ported tests came across verbatim too, dummy hostname included — a request
+built against `http://addon:8980/...` in this repo's tests is not a mistake, it
+is what keeps the two files diffable.
+
+The layout under `projectsDir` is `<project>/<project>.db` and nothing else is
+read: a database written anywhere else is invisible to C-Gate. A Toolkit project
+is more than its `.db` — the dynamic labelling bitmaps and their index sit
+beside it — which is why uploads and archives move whole directories. Toolkit's
+`.cbz` is a flat zip of that directory; C-Gate's own `PROJECT ARCHIVE` zip is a
+different thing, holding one entry called `tagdb.db`.
+
 ## Key Files
 
 | File | Purpose |
@@ -71,7 +111,7 @@ Docker Container
 | `Dockerfile` | Multi-stage build: Go web bridge + Java C-Gate runtime |
 | `docker-compose.yml` | Service definition with ports, volumes, logging config |
 | `entrypoint.sh` | Container entrypoint — starts web bridge, execs C-Gate |
-| `web/main.go` | Go web bridge source (HTTP API, WebSocket hub, TCP client) |
+| `web/main.go` | Go web bridge source (HTTP API, WebSocket hub, TCP client, project databases) |
 | `web/console.html` | Embedded single-page web console UI |
 | `config/logback.xml` | Logback config — ConsoleAppender (stdout) + RollingFileAppender |
 | `config/access.txt` | C-Gate access control (IP-based privilege levels) |
