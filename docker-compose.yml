@@ -10,6 +10,12 @@ services:
     image: cgate-server:latest
     container_name: cgate-server
     restart: unless-stopped
+    environment:
+      # Which project the web console treats as the one in use — the project
+      # its backup button targets. Optional: left unset, the console asks
+      # C-Gate (PROJECT USE) and caches the answer. Set it to pin the console
+      # to one project regardless of what C-Gate has loaded.
+      CGATE_PROJECT: ${CGATE_PROJECT:-}
     ports:
       # Command Interface
       - "20023:20023"

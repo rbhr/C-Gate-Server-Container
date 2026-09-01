@@ -33,6 +33,38 @@ Open [http://localhost:8980](http://localhost:8980) in a browser to get a termin
 - **Live streaming** — events and status changes from the C-Bus network appear in real time via WebSocket
 - **Stream filtering** — toggle visibility of events, status updates, commands, and responses
 - **Command history** — use arrow keys to recall previous commands
+- **Project tag databases** — back up, download and upload whole projects, see [below](#project-tag-databases)
+
+### Project tag databases
+
+**Back up &lt;project&gt;** in the console header sends `project save`, waits for C-Gate to
+write the project out, and downloads the whole project directory — database, dynamic
+labelling bitmaps and index — as a `.cbz`, which is the shape and the name C-Bus Toolkit
+restores from.
+
+The save is the point of it. C-Gate holds a loaded project in memory and writes it to disk
+only when told to, so a backup taken without one is whatever was last saved. If C-Gate is
+unreachable the download still happens against the copy on disk and the log says it may be
+out of date.
+
+**Tag database** opens a panel listing every project under `tag/`, with its file count, size
+and when its database was last written. Each project can be downloaded as `.db` (the database
+alone) or, when there is more beside it, `.zip` and `.cbz` — the same archive under two names.
+Nothing in this table sends `project save` first, so use the header button when the project
+has changed since it was loaded.
+
+**Upload** takes a Toolkit `.cbz`, a `.zip` or `.tar` of a project directory, or a bare
+`.db`. The file is identified by its contents rather than its name, and the project name
+comes from the database inside it — so Toolkit's `YELMAH_09_May_2025_2214_1.18.1.cbz` needs
+no renaming. An upload is unpacked into a staging directory first, so nothing in place is
+touched until a complete project has landed; the project is then stopped and closed in
+C-Gate, the old copy moved aside as `<project>.bak`, and the project loaded and started
+again. Uploads are capped at 64 MB, expanding to at most 256 MB across 4096 files, and
+entries that would be written outside the project directory are refused.
+
+Which project counts as "in use" is normally asked of C-Gate (`PROJECT USE` answers
+`123 project=NAME`). Set `CGATE_PROJECT` in the environment to override that — see
+[Project Files](#project-files).
 
 ### HTTP Commander
 
@@ -118,6 +150,24 @@ tag/
 │   └── HOME.db
 └── EXAMPLE/
     └── EXAMPLE.db
+```
+
+The web console reads and writes this directory: it lists what is there, serves each project
+for download, and installs uploads into the same layout. Nothing else is written to it, and
+a database placed anywhere but `tag/<project>/<project>.db` is invisible to C-Gate.
+
+The console marks one project **(in use)**, and the header's backup button targets it. That
+name is asked of C-Gate on first use and cached. If C-Gate gives the wrong answer — or you
+want the console pinned to one project regardless — set it explicitly:
+
+```yaml
+services:
+  cgate:
+    environment:
+      # Optional. Left unset, the console asks C-Gate which project is loaded.
+      CGATE_PROJECT: HOME
+      # Optional. Where the console looks for projects; must match the bind mount.
+      CGATE_PROJECTS_DIR: /cgate/tag
 ```
 
 ### C-Gate Version
